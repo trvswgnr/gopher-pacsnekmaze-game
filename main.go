@@ -5,11 +5,9 @@ import (
 	"log"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
-	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/goregular"
@@ -34,19 +32,18 @@ const (
 )
 
 type Game struct {
-	snake        []Point
-	foods        []Point
-	exit         Point
-	direction    Point
-	score        int
-	state        GameState
-	font         font.Face
-	maze         [][]bool
-	viewportX    int
-	mazeWidth    int
-	mazeHeight   int
-	lastMove     time.Time
-	moveInterval time.Duration
+	snake       []Point
+	foods       []Point
+	exit        Point
+	direction   Point
+	score       int
+	state       GameState
+	font        font.Face
+	maze        [][]bool
+	viewportX   int
+	mazeWidth   int
+	mazeHeight  int
+	moveCounter int
 }
 
 type Point struct {
@@ -55,11 +52,9 @@ type Point struct {
 
 func NewGame() *Game {
 	g := &Game{
-		direction:    Point{X: 1, Y: 0},
-		state:        StateStart,
-		viewportX:    0,
-		lastMove:     time.Now(),
-		moveInterval: time.Millisecond * 200, // Adjust this value to change snake speed
+		direction: Point{X: 1, Y: 0},
+		state:     StateStart,
+		viewportX: 0,
 	}
 	g.loadLevel()
 	g.loadFont()
@@ -131,9 +126,10 @@ func (g *Game) Update() error {
 		}
 	case StatePlaying:
 		g.handleInput()
-		if time.Since(g.lastMove) >= g.moveInterval {
+		g.moveCounter++
+		if g.moveCounter >= 10 {
+			g.moveCounter = 0
 			g.moveSnake()
-			g.lastMove = time.Now()
 		}
 	case StateGameOver, StateWin:
 		if ebiten.IsKeyPressed(ebiten.KeyR) {
@@ -146,27 +142,27 @@ func (g *Game) Update() error {
 }
 
 func (g *Game) handleInput() {
-	if inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft) && g.direction.X == 0 {
+	if ebiten.IsKeyPressed(ebiten.KeyArrowLeft) && g.direction.X == 0 {
 		g.direction = Point{X: -1, Y: 0}
 	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) && g.direction.X == 0 {
+	if ebiten.IsKeyPressed(ebiten.KeyArrowRight) && g.direction.X == 0 {
 		g.direction = Point{X: 1, Y: 0}
 	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) && g.direction.Y == 0 {
+	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) && g.direction.Y == 0 {
 		g.direction = Point{X: 0, Y: -1}
 	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) && g.direction.Y == 0 {
+	if ebiten.IsKeyPressed(ebiten.KeyArrowDown) && g.direction.Y == 0 {
 		g.direction = Point{X: 0, Y: 1}
 	}
 }
 
 func (g *Game) moveSnake() {
 	newHead := Point{
-		X: g.snake[0].X + g.direction.X,
-		Y: g.snake[0].Y + g.direction.Y,
+		X: (g.snake[0].X + g.direction.X + g.mazeWidth) % g.mazeWidth,
+		Y: (g.snake[0].Y + g.direction.Y + g.mazeHeight) % g.mazeHeight,
 	}
 
-	if newHead.X < 0 || newHead.X >= g.mazeWidth || newHead.Y < 0 || newHead.Y >= g.mazeHeight || g.isCollision(newHead) {
+	if g.isCollision(newHead) {
 		g.state = StateGameOver
 		return
 	}
