@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
@@ -33,17 +34,19 @@ const (
 )
 
 type Game struct {
-	snake      []Point
-	foods      []Point
-	exit       Point
-	direction  Point
-	score      int
-	state      GameState
-	font       font.Face
-	maze       [][]bool
-	viewportX  int
-	mazeWidth  int
-	mazeHeight int
+	snake        []Point
+	foods        []Point
+	exit         Point
+	direction    Point
+	score        int
+	state        GameState
+	font         font.Face
+	maze         [][]bool
+	viewportX    int
+	mazeWidth    int
+	mazeHeight   int
+	lastMove     time.Time
+	moveInterval time.Duration
 }
 
 type Point struct {
@@ -52,9 +55,11 @@ type Point struct {
 
 func NewGame() *Game {
 	g := &Game{
-		direction: Point{X: 1, Y: 0},
-		state:     StateStart,
-		viewportX: 0,
+		direction:    Point{X: 1, Y: 0},
+		state:        StateStart,
+		viewportX:    0,
+		lastMove:     time.Now(),
+		moveInterval: time.Millisecond * 200, // Adjust this value to change snake speed
 	}
 	g.loadLevel()
 	g.loadFont()
@@ -125,49 +130,14 @@ func (g *Game) Update() error {
 			g.state = StatePlaying
 		}
 	case StatePlaying:
-		moved := g.handleInput()
-		if moved {
-			newHead := Point{
-				X: g.snake[0].X + g.direction.X,
-				Y: g.snake[0].Y + g.direction.Y,
-			}
-
-			if newHead.X < 0 || newHead.X >= g.mazeWidth || newHead.Y < 0 || newHead.Y >= g.mazeHeight || g.isCollision(newHead) {
-				g.state = StateGameOver
-				return nil
-			}
-
-			g.snake = append([]Point{newHead}, g.snake...)
-
-			if newHead == g.exit {
-				g.state = StateWin
-				return nil
-			}
-
-			ateFood := false
-			for i, food := range g.foods {
-				if newHead == food {
-					g.score++
-					ateFood = true
-					g.foods = append(g.foods[:i], g.foods[i+1:]...)
-					break
-				}
-			}
-
-			if !ateFood {
-				g.snake = g.snake[:len(g.snake)-1]
-			}
-
-			if newHead.X-g.viewportX > VIEWPORT_WIDTH/2 {
-				g.viewportX = newHead.X - VIEWPORT_WIDTH/2
-			}
-			if g.viewportX > g.mazeWidth-VIEWPORT_WIDTH {
-				g.viewportX = g.mazeWidth - VIEWPORT_WIDTH
-			}
+		g.handleInput()
+		if time.Since(g.lastMove) >= g.moveInterval {
+			g.moveSnake()
+			g.lastMove = time.Now()
 		}
 	case StateGameOver, StateWin:
 		if ebiten.IsKeyPressed(ebiten.KeyR) {
-			g = NewGame()
+			*g = *NewGame()
 			g.state = StatePlaying
 		}
 	}
@@ -175,30 +145,59 @@ func (g *Game) Update() error {
 	return nil
 }
 
-func (g *Game) handleInput() bool {
+func (g *Game) handleInput() {
 	if inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft) && g.direction.X == 0 {
 		g.direction = Point{X: -1, Y: 0}
-		return true
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyArrowRight) && g.direction.X == 0 {
 		g.direction = Point{X: 1, Y: 0}
-		return true
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyArrowUp) && g.direction.Y == 0 {
 		g.direction = Point{X: 0, Y: -1}
-		return true
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyArrowDown) && g.direction.Y == 0 {
 		g.direction = Point{X: 0, Y: 1}
-		return true
 	}
-	if (g.direction.X == -1 && inpututil.IsKeyJustPressed(ebiten.KeyArrowLeft)) ||
-		(g.direction.X == 1 && inpututil.IsKeyJustPressed(ebiten.KeyArrowRight)) ||
-		(g.direction.Y == -1 && inpututil.IsKeyJustPressed(ebiten.KeyArrowUp)) ||
-		(g.direction.Y == 1 && inpututil.IsKeyJustPressed(ebiten.KeyArrowDown)) {
-		return true
+}
+
+func (g *Game) moveSnake() {
+	newHead := Point{
+		X: g.snake[0].X + g.direction.X,
+		Y: g.snake[0].Y + g.direction.Y,
 	}
-	return false
+
+	if newHead.X < 0 || newHead.X >= g.mazeWidth || newHead.Y < 0 || newHead.Y >= g.mazeHeight || g.isCollision(newHead) {
+		g.state = StateGameOver
+		return
+	}
+
+	g.snake = append([]Point{newHead}, g.snake...)
+
+	if newHead == g.exit {
+		g.state = StateWin
+		return
+	}
+
+	ateFood := false
+	for i, food := range g.foods {
+		if newHead == food {
+			g.score++
+			ateFood = true
+			g.foods = append(g.foods[:i], g.foods[i+1:]...)
+			break
+		}
+	}
+
+	if !ateFood {
+		g.snake = g.snake[:len(g.snake)-1]
+	}
+
+	if newHead.X-g.viewportX > VIEWPORT_WIDTH/2 {
+		g.viewportX = newHead.X - VIEWPORT_WIDTH/2
+	}
+	if g.viewportX > g.mazeWidth-VIEWPORT_WIDTH {
+		g.viewportX = g.mazeWidth - VIEWPORT_WIDTH
+	}
 }
 
 func drawMaze(g *Game, screen *ebiten.Image) {
