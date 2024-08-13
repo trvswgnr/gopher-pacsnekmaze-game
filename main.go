@@ -5,6 +5,7 @@ import (
 	"embed"
 	"image/color"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 
@@ -22,6 +23,7 @@ const (
 	GRID_SIZE      = 20
 	VIEWPORT_WIDTH = 32
 	TITLE          = "tr4vvyr00lz"
+	POWERUP_TIME   = 300 // 5 seconds @ 60fps
 )
 
 type GameState int
@@ -38,7 +40,7 @@ type Game struct {
 	foods         []Point
 	exit          Point
 	direction     Point
-	nextDirection Point // Add this line
+	nextDirection Point
 	score         int
 	state         GameState
 	fontFace      *text.GoTextFace
@@ -48,16 +50,22 @@ type Game struct {
 	mazeWidth     int
 	mazeHeight    int
 	moveCounter   int
+	enemies       []Enemy
+	powerUpTimer  int
 }
 
 type Point struct {
 	X, Y int
 }
 
+type Enemy struct {
+	Position Point
+}
+
 func NewGame() *Game {
 	g := &Game{
 		direction:     Point{X: 1, Y: 0},
-		nextDirection: Point{X: 1, Y: 0}, // Add this line
+		nextDirection: Point{X: 1, Y: 0},
 		state:         StateStart,
 		viewportX:     0,
 	}
@@ -100,6 +108,7 @@ func (g *Game) loadLevel() {
 	g.mazeWidth = len(lines[0])
 	g.maze = make([][]bool, g.mazeHeight)
 	g.foods = []Point{}
+	g.enemies = []Enemy{}
 
 	hasSnakeStart := false
 	hasExit := false
@@ -118,6 +127,8 @@ func (g *Game) loadLevel() {
 			case 'E':
 				g.exit = Point{X: x, Y: y}
 				hasExit = true
+			case 'X':
+				g.enemies = append(g.enemies, Enemy{Position: Point{X: x, Y: y}})
 			}
 		}
 	}
@@ -125,21 +136,6 @@ func (g *Game) loadLevel() {
 	if !hasSnakeStart || !hasExit || len(g.foods) == 0 {
 		log.Fatal("Invalid level: missing snake start, exit, or food")
 	}
-}
-
-func (g *Game) isCollision(p Point) bool {
-	if p.Y < 0 || p.Y >= g.mazeHeight || p.X < 0 || p.X >= g.mazeWidth {
-		return true
-	}
-	if g.maze[p.Y][p.X] {
-		return true
-	}
-	for _, s := range g.snake {
-		if s == p {
-			return true
-		}
-	}
-	return false
 }
 
 func (g *Game) Update() error {
@@ -154,6 +150,10 @@ func (g *Game) Update() error {
 		if g.moveCounter >= 10 {
 			g.moveCounter = 0
 			g.moveSnake()
+			g.moveEnemies()
+		}
+		if g.powerUpTimer > 0 {
+			g.powerUpTimer--
 		}
 	case StateGameOver, StateWin:
 		if ebiten.IsKeyPressed(ebiten.KeyR) {
@@ -181,7 +181,6 @@ func (g *Game) handleInput() {
 }
 
 func (g *Game) moveSnake() {
-	// Update the direction
 	if g.nextDirection.X != -g.direction.X || g.nextDirection.Y != -g.direction.Y {
 		g.direction = g.nextDirection
 	}
@@ -209,6 +208,7 @@ func (g *Game) moveSnake() {
 			g.score++
 			ateFood = true
 			g.foods = append(g.foods[:i], g.foods[i+1:]...)
+			g.powerUpTimer = POWERUP_TIME
 			break
 		}
 	}
@@ -217,7 +217,110 @@ func (g *Game) moveSnake() {
 		g.snake = g.snake[:len(g.snake)-1]
 	}
 
+	g.checkEnemyCollision()
 	g.adjustViewport()
+}
+
+func (g *Game) checkEnemyCollision() {
+	snakeHead := g.snake[0]
+	for i, enemy := range g.enemies {
+		if snakeHead == enemy.Position {
+			if g.powerUpTimer > 0 {
+				// eat the enemy
+				g.score += 5
+				g.enemies = append(g.enemies[:i], g.enemies[i+1:]...)
+				return
+			} else {
+				g.state = StateGameOver
+				return
+			}
+		}
+	}
+}
+
+func (g *Game) moveEnemies() {
+	for i := range g.enemies {
+		g.moveEnemy(&g.enemies[i])
+	}
+}
+
+func (g *Game) moveEnemy(e *Enemy) {
+	snakeHead := g.snake[0]
+	possibleMoves := []Point{
+		{X: 1, Y: 0}, {X: -1, Y: 0}, {X: 0, Y: 1}, {X: 0, Y: -1},
+	}
+
+	var bestMove Point
+	if g.powerUpTimer > 0 {
+		bestMove = g.getBestMoveAway(e.Position, snakeHead, possibleMoves)
+	} else {
+		bestMove = g.getBestMoveTowards(e.Position, snakeHead, possibleMoves)
+	}
+
+	newPos := Point{
+		X: (e.Position.X + bestMove.X + g.mazeWidth) % g.mazeWidth,
+		Y: (e.Position.Y + bestMove.Y + g.mazeHeight) % g.mazeHeight,
+	}
+
+	if !g.isCollision(newPos) {
+		e.Position = newPos
+	}
+}
+
+func (g *Game) getBestMoveTowards(from, to Point, moves []Point) Point {
+	var bestMove Point
+	minDistance := math.MaxFloat64
+
+	for _, move := range moves {
+		newPos := Point{
+			X: (from.X + move.X + g.mazeWidth) % g.mazeWidth,
+			Y: (from.Y + move.Y + g.mazeHeight) % g.mazeHeight,
+		}
+
+		if !g.isCollision(newPos) {
+			distance := math.Hypot(float64(newPos.X-to.X), float64(newPos.Y-to.Y))
+			if distance < minDistance {
+				minDistance = distance
+				bestMove = move
+			}
+		}
+	}
+
+	return bestMove
+}
+
+func (g *Game) getBestMoveAway(from, to Point, moves []Point) Point {
+	var bestMove Point
+	maxDistance := 0.0
+
+	for _, move := range moves {
+		newPos := Point{
+			X: (from.X + move.X + g.mazeWidth) % g.mazeWidth,
+			Y: (from.Y + move.Y + g.mazeHeight) % g.mazeHeight,
+		}
+
+		if !g.isCollision(newPos) {
+			distance := math.Hypot(float64(newPos.X-to.X), float64(newPos.Y-to.Y))
+			if distance > maxDistance {
+				maxDistance = distance
+				bestMove = move
+			}
+		}
+	}
+
+	return bestMove
+}
+
+func (g *Game) isCollision(p Point) bool {
+	if g.maze[p.Y][p.X] {
+		return true
+	}
+	for _, s := range g.snake[1:] {
+		if s == p {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *Game) adjustViewport() {
@@ -264,15 +367,32 @@ func drawSnake(g *Game, screen *ebiten.Image) {
 	}
 }
 
+func drawEnemies(g *Game, screen *ebiten.Image) {
+	for _, enemy := range g.enemies {
+		if enemy.Position.X >= g.viewportX && enemy.Position.X < g.viewportX+VIEWPORT_WIDTH {
+			enemyColor := color.RGBA{255, 165, 0, 255} // orange regularly
+			if g.powerUpTimer > 0 {
+				enemyColor = color.RGBA{0, 0, 255, 255} // blue when vulnerable
+			}
+			vector.DrawFilledRect(screen, float32((enemy.Position.X-g.viewportX)*GRID_SIZE), float32(enemy.Position.Y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, enemyColor, true)
+		}
+	}
+}
+
 func drawHUD(g *Game, screen *ebiten.Image) {
 	op := &text.DrawOptions{}
 	op.GeoM.Translate(10, 25)
 	text.Draw(screen, "Score: "+strconv.Itoa(g.score), g.smallerFont, op)
 
+	if g.powerUpTimer > 0 {
+		powerUpText := "Power-Up: " + strconv.Itoa(g.powerUpTimer/60) // Convert frames to seconds
+		op.GeoM.Translate(0, 25)
+		text.Draw(screen, powerUpText, g.smallerFont, op)
+	}
+
 	if g.state == StateGameOver || g.state == StateWin {
 		op := &text.DrawOptions{}
 
-		// Game Over or Win message
 		message := "Game Over!"
 		if g.state == StateWin {
 			message = "You Win!"
@@ -281,7 +401,6 @@ func drawHUD(g *Game, screen *ebiten.Image) {
 		op.GeoM.Translate((float64(SCREEN_WIDTH)-messageWidth)/2, float64(SCREEN_HEIGHT)/2-25)
 		text.Draw(screen, message, g.smallerFont, op)
 
-		// Restart message
 		restartText := "Press 'R' to restart"
 		restartWidth := float64(len(restartText)) * float64(g.smallerFont.Size)
 		op.GeoM.Reset()
@@ -315,6 +434,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	case StatePlaying, StateGameOver, StateWin:
 		drawMaze(g, screen)
 		drawSnake(g, screen)
+		drawEnemies(g, screen)
 		drawHUD(g, screen)
 	}
 }
