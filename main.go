@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"image/color"
 	"log"
 	"os"
@@ -8,10 +9,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
-	"github.com/hajimehoshi/ebiten/v2/text"
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/gofont/goregular"
-	"golang.org/x/image/font/opentype"
+	"github.com/hajimehoshi/ebiten/v2/text/v2"
 )
 
 const (
@@ -38,7 +36,8 @@ type Game struct {
 	direction   Point
 	score       int
 	state       GameState
-	font        font.Face
+	fontFace    *text.GoTextFace
+	smallerFont *text.GoTextFace
 	maze        [][]bool
 	viewportX   int
 	mazeWidth   int
@@ -57,22 +56,29 @@ func NewGame() *Game {
 		viewportX: 0,
 	}
 	g.loadLevel()
-	g.loadFont()
+	g.loadFonts()
 	return g
 }
 
-func (g *Game) loadFont() {
-	tt, err := opentype.Parse(goregular.TTF)
+func (g *Game) loadFonts() {
+	fontBytes, err := os.ReadFile("pressstart2p.ttf")
 	if err != nil {
 		log.Fatal(err)
 	}
-	g.font, err = opentype.NewFace(tt, &opentype.FaceOptions{
-		Size:    24,
-		DPI:     72,
-		Hinting: font.HintingFull,
-	})
+
+	fontFaceSource, err := text.NewGoTextFaceSource(bytes.NewReader(fontBytes))
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	g.fontFace = &text.GoTextFace{
+		Source: fontFaceSource,
+		Size:   24,
+	}
+
+	g.smallerFont = &text.GoTextFace{
+		Source: fontFaceSource,
+		Size:   20,
 	}
 }
 
@@ -228,14 +234,43 @@ func drawSnake(g *Game, screen *ebiten.Image) {
 }
 
 func drawHUD(g *Game, screen *ebiten.Image) {
-	text.Draw(screen, "Score: "+string(rune(g.score+'0')), g.font, 10, 30, color.White)
+	op := &text.DrawOptions{}
+	op.GeoM.Translate(10, 25)
+	text.Draw(screen, "Score: "+string(rune(g.score+'0')), g.smallerFont, op)
+
 	if g.state == StateGameOver {
-		text.Draw(screen, "Game Over!", g.font, SCREEN_WIDTH/2-60, SCREEN_HEIGHT/2-30, color.White)
-		text.Draw(screen, "Press 'R' to restart", g.font, SCREEN_WIDTH/2-100, SCREEN_HEIGHT/2+30, color.White)
+		op := &text.DrawOptions{}
+		op.GeoM.Translate(float64(SCREEN_WIDTH)/2-50, float64(SCREEN_HEIGHT)/2-25)
+		text.Draw(screen, "Game Over!", g.smallerFont, op)
+
+		op.GeoM.Reset()
+		op.GeoM.Translate(float64(SCREEN_WIDTH)/2-85, float64(SCREEN_HEIGHT)/2+25)
+		text.Draw(screen, "Press 'R' to restart", g.smallerFont, op)
 	} else if g.state == StateWin {
-		text.Draw(screen, "You Win!", g.font, SCREEN_WIDTH/2-50, SCREEN_HEIGHT/2-30, color.White)
-		text.Draw(screen, "Press 'R' to restart", g.font, SCREEN_WIDTH/2-100, SCREEN_HEIGHT/2+30, color.White)
+		op := &text.DrawOptions{}
+		op.GeoM.Translate(float64(SCREEN_WIDTH)/2-40, float64(SCREEN_HEIGHT)/2-25)
+		text.Draw(screen, "You Win!", g.smallerFont, op)
+
+		op.GeoM.Reset()
+		op.GeoM.Translate(float64(SCREEN_WIDTH)/2-85, float64(SCREEN_HEIGHT)/2+25)
+		text.Draw(screen, "Press 'R' to restart", g.smallerFont, op)
 	}
+}
+
+func drawStartScreen(g *Game, screen *ebiten.Image) {
+	titleWidth := float64(len(TITLE)) * float64(g.fontFace.Size)
+	titleHeight := float64(g.fontFace.Size)
+
+	op := &text.DrawOptions{}
+	op.GeoM.Translate((float64(SCREEN_WIDTH)-titleWidth)/2, float64(SCREEN_HEIGHT)/2-titleHeight/2-30)
+	text.Draw(screen, TITLE, g.fontFace, op)
+
+	startText := "Press SPACE to start"
+	startWidth := float64(len(startText)) * float64(g.fontFace.Size)
+
+	op.GeoM.Reset()
+	op.GeoM.Translate((float64(SCREEN_WIDTH)-startWidth)/2, float64(SCREEN_HEIGHT)/2+30)
+	text.Draw(screen, startText, g.fontFace, op)
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
@@ -243,8 +278,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	switch g.state {
 	case StateStart:
-		text.Draw(screen, TITLE, g.font, SCREEN_WIDTH/2-80, SCREEN_HEIGHT/2-30, color.White)
-		text.Draw(screen, "Press SPACE to start", g.font, SCREEN_WIDTH/2-100, SCREEN_HEIGHT/2+30, color.White)
+		drawStartScreen(g, screen)
 	case StatePlaying, StateGameOver, StateWin:
 		drawMaze(g, screen)
 		drawSnake(g, screen)
