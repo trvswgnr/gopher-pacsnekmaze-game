@@ -2,15 +2,19 @@ package main
 
 import (
 	"bytes"
+	"embed"
 	"image/color"
 	"log"
-	"os"
+	"strconv"
 	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 )
+
+//go:embed assets/*
+var assets embed.FS
 
 const (
 	SCREEN_WIDTH   = 640
@@ -30,19 +34,20 @@ const (
 )
 
 type Game struct {
-	snake       []Point
-	foods       []Point
-	exit        Point
-	direction   Point
-	score       int
-	state       GameState
-	fontFace    *text.GoTextFace
-	smallerFont *text.GoTextFace
-	maze        [][]bool
-	viewportX   int
-	mazeWidth   int
-	mazeHeight  int
-	moveCounter int
+	snake         []Point
+	foods         []Point
+	exit          Point
+	direction     Point
+	nextDirection Point // Add this line
+	score         int
+	state         GameState
+	fontFace      *text.GoTextFace
+	smallerFont   *text.GoTextFace
+	maze          [][]bool
+	viewportX     int
+	mazeWidth     int
+	mazeHeight    int
+	moveCounter   int
 }
 
 type Point struct {
@@ -51,9 +56,10 @@ type Point struct {
 
 func NewGame() *Game {
 	g := &Game{
-		direction: Point{X: 1, Y: 0},
-		state:     StateStart,
-		viewportX: 0,
+		direction:     Point{X: 1, Y: 0},
+		nextDirection: Point{X: 1, Y: 0}, // Add this line
+		state:         StateStart,
+		viewportX:     0,
 	}
 	g.loadLevel()
 	g.loadFonts()
@@ -61,7 +67,7 @@ func NewGame() *Game {
 }
 
 func (g *Game) loadFonts() {
-	fontBytes, err := os.ReadFile("pressstart2p.ttf")
+	fontBytes, err := assets.ReadFile("assets/pressstart2p.ttf")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -83,7 +89,7 @@ func (g *Game) loadFonts() {
 }
 
 func (g *Game) loadLevel() {
-	content, err := os.ReadFile("level.txt")
+	content, err := assets.ReadFile("assets/level.txt")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -95,6 +101,9 @@ func (g *Game) loadLevel() {
 	g.maze = make([][]bool, g.mazeHeight)
 	g.foods = []Point{}
 
+	hasSnakeStart := false
+	hasExit := false
+
 	for y, line := range lines {
 		g.maze[y] = make([]bool, g.mazeWidth)
 		for x, char := range line {
@@ -105,14 +114,23 @@ func (g *Game) loadLevel() {
 				g.foods = append(g.foods, Point{X: x, Y: y})
 			case 'S':
 				g.snake = []Point{{X: x, Y: y}}
+				hasSnakeStart = true
 			case 'E':
 				g.exit = Point{X: x, Y: y}
+				hasExit = true
 			}
 		}
+	}
+
+	if !hasSnakeStart || !hasExit || len(g.foods) == 0 {
+		log.Fatal("Invalid level: missing snake start, exit, or food")
 	}
 }
 
 func (g *Game) isCollision(p Point) bool {
+	if p.Y < 0 || p.Y >= g.mazeHeight || p.X < 0 || p.X >= g.mazeWidth {
+		return true
+	}
 	if g.maze[p.Y][p.X] {
 		return true
 	}
@@ -149,20 +167,25 @@ func (g *Game) Update() error {
 
 func (g *Game) handleInput() {
 	if ebiten.IsKeyPressed(ebiten.KeyArrowLeft) && g.direction.X == 0 {
-		g.direction = Point{X: -1, Y: 0}
+		g.nextDirection = Point{X: -1, Y: 0}
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyArrowRight) && g.direction.X == 0 {
-		g.direction = Point{X: 1, Y: 0}
+		g.nextDirection = Point{X: 1, Y: 0}
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) && g.direction.Y == 0 {
-		g.direction = Point{X: 0, Y: -1}
+		g.nextDirection = Point{X: 0, Y: -1}
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyArrowDown) && g.direction.Y == 0 {
-		g.direction = Point{X: 0, Y: 1}
+		g.nextDirection = Point{X: 0, Y: 1}
 	}
 }
 
 func (g *Game) moveSnake() {
+	// Update the direction
+	if g.nextDirection.X != -g.direction.X || g.nextDirection.Y != -g.direction.Y {
+		g.direction = g.nextDirection
+	}
+
 	newHead := Point{
 		X: (g.snake[0].X + g.direction.X + g.mazeWidth) % g.mazeWidth,
 		Y: (g.snake[0].Y + g.direction.Y + g.mazeHeight) % g.mazeHeight,
@@ -194,32 +217,40 @@ func (g *Game) moveSnake() {
 		g.snake = g.snake[:len(g.snake)-1]
 	}
 
-	if newHead.X-g.viewportX > VIEWPORT_WIDTH/2 {
-		g.viewportX = newHead.X - VIEWPORT_WIDTH/2
+	g.adjustViewport()
+}
+
+func (g *Game) adjustViewport() {
+	snakeHead := g.snake[0]
+	if snakeHead.X-g.viewportX > VIEWPORT_WIDTH*3/4 {
+		g.viewportX = snakeHead.X - VIEWPORT_WIDTH*3/4
+	} else if snakeHead.X-g.viewportX < VIEWPORT_WIDTH/4 {
+		g.viewportX = snakeHead.X - VIEWPORT_WIDTH/4
 	}
-	if g.viewportX > g.mazeWidth-VIEWPORT_WIDTH {
+
+	if g.viewportX < 0 {
+		g.viewportX = 0
+	} else if g.viewportX > g.mazeWidth-VIEWPORT_WIDTH {
 		g.viewportX = g.mazeWidth - VIEWPORT_WIDTH
 	}
 }
 
 func drawMaze(g *Game, screen *ebiten.Image) {
-	// draw walls
 	for y := 0; y < g.mazeHeight; y++ {
 		for x := 0; x < VIEWPORT_WIDTH; x++ {
-			if x+g.viewportX < g.mazeWidth && g.maze[y][x+g.viewportX] {
+			worldX := x + g.viewportX
+			if worldX < g.mazeWidth && g.maze[y][worldX] {
 				vector.DrawFilledRect(screen, float32(x*GRID_SIZE), float32(y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{100, 100, 100, 255}, true)
 			}
 		}
 	}
 
-	// draw food
 	for _, food := range g.foods {
 		if food.X >= g.viewportX && food.X < g.viewportX+VIEWPORT_WIDTH {
 			vector.DrawFilledRect(screen, float32((food.X-g.viewportX)*GRID_SIZE), float32(food.Y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{255, 0, 0, 255}, true)
 		}
 	}
 
-	// draw exit
 	if g.exit.X >= g.viewportX && g.exit.X < g.viewportX+VIEWPORT_WIDTH {
 		vector.DrawFilledRect(screen, float32((g.exit.X-g.viewportX)*GRID_SIZE), float32(g.exit.Y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{0, 0, 255, 255}, true)
 	}
@@ -236,24 +267,26 @@ func drawSnake(g *Game, screen *ebiten.Image) {
 func drawHUD(g *Game, screen *ebiten.Image) {
 	op := &text.DrawOptions{}
 	op.GeoM.Translate(10, 25)
-	text.Draw(screen, "Score: "+string(rune(g.score+'0')), g.smallerFont, op)
+	text.Draw(screen, "Score: "+strconv.Itoa(g.score), g.smallerFont, op)
 
-	if g.state == StateGameOver {
+	if g.state == StateGameOver || g.state == StateWin {
 		op := &text.DrawOptions{}
-		op.GeoM.Translate(float64(SCREEN_WIDTH)/2-50, float64(SCREEN_HEIGHT)/2-25)
-		text.Draw(screen, "Game Over!", g.smallerFont, op)
 
-		op.GeoM.Reset()
-		op.GeoM.Translate(float64(SCREEN_WIDTH)/2-85, float64(SCREEN_HEIGHT)/2+25)
-		text.Draw(screen, "Press 'R' to restart", g.smallerFont, op)
-	} else if g.state == StateWin {
-		op := &text.DrawOptions{}
-		op.GeoM.Translate(float64(SCREEN_WIDTH)/2-40, float64(SCREEN_HEIGHT)/2-25)
-		text.Draw(screen, "You Win!", g.smallerFont, op)
+		// Game Over or Win message
+		message := "Game Over!"
+		if g.state == StateWin {
+			message = "You Win!"
+		}
+		messageWidth := float64(len(message)) * float64(g.smallerFont.Size)
+		op.GeoM.Translate((float64(SCREEN_WIDTH)-messageWidth)/2, float64(SCREEN_HEIGHT)/2-25)
+		text.Draw(screen, message, g.smallerFont, op)
 
+		// Restart message
+		restartText := "Press 'R' to restart"
+		restartWidth := float64(len(restartText)) * float64(g.smallerFont.Size)
 		op.GeoM.Reset()
-		op.GeoM.Translate(float64(SCREEN_WIDTH)/2-85, float64(SCREEN_HEIGHT)/2+25)
-		text.Draw(screen, "Press 'R' to restart", g.smallerFont, op)
+		op.GeoM.Translate((float64(SCREEN_WIDTH)-restartWidth)/2, float64(SCREEN_HEIGHT)/2+25)
+		text.Draw(screen, restartText, g.smallerFont, op)
 	}
 }
 
