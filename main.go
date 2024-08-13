@@ -36,22 +36,23 @@ const (
 )
 
 type Game struct {
-	snake         []Point
-	foods         []Point
-	exit          Point
-	direction     Point
-	nextDirection Point
-	score         int
-	state         GameState
-	fontFace      *text.GoTextFace
-	smallerFont   *text.GoTextFace
-	maze          [][]bool
-	viewportX     int
-	mazeWidth     int
-	mazeHeight    int
-	moveCounter   int
-	enemies       []Enemy
-	powerUpTimer  int
+	snake             []Point
+	foods             []Point
+	exit              Point
+	direction         Point
+	nextDirection     Point
+	score             int
+	state             GameState
+	fontFace          *text.GoTextFace
+	smallerFont       *text.GoTextFace
+	maze              [][]bool
+	viewportX         int
+	mazeWidth         int
+	mazeHeight        int
+	moveCounter       int
+	enemies           []Enemy
+	powerUpTimer      int
+	startBlinkCounter int
 }
 
 type Point struct {
@@ -143,6 +144,11 @@ func (g *Game) Update() error {
 	case StateStart:
 		if ebiten.IsKeyPressed(ebiten.KeySpace) {
 			g.state = StatePlaying
+		}
+		// Update blink counter
+		g.startBlinkCounter++
+		if g.startBlinkCounter >= 60 { // Reset every second (assuming 60 FPS)
+			g.startBlinkCounter = 0
 		}
 	case StatePlaying:
 		g.handleInput()
@@ -417,14 +423,16 @@ func drawStartScreen(g *Game, screen *ebiten.Image) {
 	op.GeoM.Translate((float64(SCREEN_WIDTH)-titleWidth)/2, float64(SCREEN_HEIGHT)/2-titleHeight/2-30)
 	text.Draw(screen, TITLE, g.fontFace, op)
 
-	startText := "Press SPACE to start"
-	startWidth := float64(len(startText)) * float64(g.fontFace.Size)
+	// Only draw the start text when it should be visible
+	if g.startBlinkCounter < 30 { // Visible for half a second, then invisible for half a second
+		startText := "Press SPACE to start"
+		startWidth := float64(len(startText)) * float64(g.fontFace.Size)
 
-	op.GeoM.Reset()
-	op.GeoM.Translate((float64(SCREEN_WIDTH)-startWidth)/2, float64(SCREEN_HEIGHT)/2+30)
-	text.Draw(screen, startText, g.fontFace, op)
+		op.GeoM.Reset()
+		op.GeoM.Translate((float64(SCREEN_WIDTH)-startWidth)/2, float64(SCREEN_HEIGHT)/2+30)
+		text.Draw(screen, startText, g.fontFace, op)
+	}
 }
-
 func (g *Game) Draw(screen *ebiten.Image) {
 	screen.Fill(color.RGBA{0, 0, 0, 255})
 
