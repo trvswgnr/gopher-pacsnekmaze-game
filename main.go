@@ -29,11 +29,15 @@ const (
 type GameState int
 
 const (
-	StateStart GameState = iota
-	StatePlaying
-	StateGameOver
-	StateWin
+    StateStart GameState = iota
+    StatePlaying
+    StateGameOver
+    StateWin
 )
+
+func (gs GameState) String() string {
+    return [...]string{"Start", "Playing", "GameOver", "Win"}[gs]
+}
 
 type Game struct {
 	snake             []Point
