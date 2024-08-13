@@ -18,12 +18,12 @@ import (
 var assets embed.FS
 
 const (
-	SCREEN_WIDTH   = 640
-	SCREEN_HEIGHT  = 480
-	GRID_SIZE      = 20
-	VIEWPORT_WIDTH = 32
-	TITLE          = "tr4vvyr00lz"
-	POWERUP_TIME   = 300 // 5 seconds @ 60fps
+    SCREEN_WIDTH   = 640
+    SCREEN_HEIGHT  = 480
+    GRID_SIZE      = 20
+    VIEWPORT_WIDTH = SCREEN_WIDTH / GRID_SIZE
+    TITLE          = "tr4vvyr00lz"
+    POWERUP_TIME   = 300 // 5 seconds @ 60fps
 )
 
 type GameState int
