@@ -145,9 +145,9 @@ func (g *Game) Update() error {
 		if ebiten.IsKeyPressed(ebiten.KeySpace) {
 			g.state = StatePlaying
 		}
-		// Update blink counter
+		// update blink counter
 		g.startBlinkCounter++
-		if g.startBlinkCounter >= 60 { // Reset every second (assuming 60 FPS)
+		if g.startBlinkCounter >= 60 { // reset every second (60fps)
 			g.startBlinkCounter = 0
 		}
 	case StatePlaying:
@@ -423,8 +423,8 @@ func drawStartScreen(g *Game, screen *ebiten.Image) {
 	op.GeoM.Translate((float64(SCREEN_WIDTH)-titleWidth)/2, float64(SCREEN_HEIGHT)/2-titleHeight/2-30)
 	text.Draw(screen, TITLE, g.fontFace, op)
 
-	// Only draw the start text when it should be visible
-	if g.startBlinkCounter < 30 { // Visible for half a second, then invisible for half a second
+	// only draw the start text when it should be visible
+	if g.startBlinkCounter < 30 { // visible for half a second, then invisible for half a second
 		startText := "Press SPACE to start"
 		startWidth := float64(len(startText)) * float64(g.fontFace.Size)
 
