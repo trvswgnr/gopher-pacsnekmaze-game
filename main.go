@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
+	"github.com/hajimehoshi/ebiten/v2/vector"
 )
 
 const (
@@ -207,7 +207,7 @@ func drawMaze(g *Game, screen *ebiten.Image) {
 	for y := 0; y < g.mazeHeight; y++ {
 		for x := 0; x < VIEWPORT_WIDTH; x++ {
 			if x+g.viewportX < g.mazeWidth && g.maze[y][x+g.viewportX] {
-				ebitenutil.DrawRect(screen, float64(x*GRID_SIZE), float64(y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{100, 100, 100, 255})
+				vector.DrawFilledRect(screen, float32(x*GRID_SIZE), float32(y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{100, 100, 100, 255}, true)
 			}
 		}
 	}
@@ -215,20 +215,20 @@ func drawMaze(g *Game, screen *ebiten.Image) {
 	// draw food
 	for _, food := range g.foods {
 		if food.X >= g.viewportX && food.X < g.viewportX+VIEWPORT_WIDTH {
-			ebitenutil.DrawRect(screen, float64((food.X-g.viewportX)*GRID_SIZE), float64(food.Y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{255, 0, 0, 255})
+			vector.DrawFilledRect(screen, float32((food.X-g.viewportX)*GRID_SIZE), float32(food.Y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{255, 0, 0, 255}, true)
 		}
 	}
 
 	// draw exit
 	if g.exit.X >= g.viewportX && g.exit.X < g.viewportX+VIEWPORT_WIDTH {
-		ebitenutil.DrawRect(screen, float64((g.exit.X-g.viewportX)*GRID_SIZE), float64(g.exit.Y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{0, 0, 255, 255})
+		vector.DrawFilledRect(screen, float32((g.exit.X-g.viewportX)*GRID_SIZE), float32(g.exit.Y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{0, 0, 255, 255}, true)
 	}
 }
 
 func drawSnake(g *Game, screen *ebiten.Image) {
 	for _, p := range g.snake {
 		if p.X >= g.viewportX && p.X < g.viewportX+VIEWPORT_WIDTH {
-			ebitenutil.DrawRect(screen, float64((p.X-g.viewportX)*GRID_SIZE), float64(p.Y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{0, 255, 0, 255})
+			vector.DrawFilledRect(screen, float32((p.X-g.viewportX)*GRID_SIZE), float32(p.Y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{0, 255, 0, 255}, true)
 		}
 	}
 }
