@@ -1,4 +1,4 @@
-module github.com/trvswgnr/golang-pacsnekmaze
+module github.com/trvswgnr/gopher-pacsnekmaze-game
 
 go 1.19
 
