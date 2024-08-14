@@ -29,7 +29,7 @@ func NewSlice[E any](elements ...E) Slice[E] {
 	return elements
 }
 
-func (slice Slice[E]) RemoveAt(index int) Slice[E] {
+func (slice Slice[E]) removeAt(index int) Slice[E] {
 	return append(slice[:index], slice[index+1:]...)
 }
 
@@ -119,14 +119,14 @@ func NewSnake(position Vec2) Snake {
 	}
 }
 
-// createHead calculates the new position for the snake's head based on
-// its current position and direction. it wraps around the level boundaries to
+// createHead calculates the new position for the snake's head based on its
+// current position and direction. it wraps around the level boundaries to
 // create a toroidal world effect.
 func (snake *Snake) createHead() Vec2 {
 	head := snake.getHead()
 	prev := snake.prevDirection
-	height := state.level.h
-	width := state.level.w
+	height := state.level.height
+	width := state.level.width
 	return Vec2{
 		x: (head.x + prev.x + width) % width,
 		y: (head.y + prev.y + height) % height,
@@ -134,11 +134,13 @@ func (snake *Snake) createHead() Vec2 {
 }
 
 func (snake *Snake) move() {
-	snake.framesSinceLastMove++
+	// only move every 10 frames
+	snake.framesSinceLastMove += 1
 	if snake.framesSinceLastMove < 10 {
 		return
 	}
 	snake.framesSinceLastMove = 0
+
 	if snake.direction.x != -snake.prevDirection.x || snake.direction.y != -snake.prevDirection.y {
 		snake.prevDirection = snake.direction
 	}
@@ -147,7 +149,7 @@ func (snake *Snake) move() {
 
 	snake.checkCollision(newHead)
 
-	snake.extend(newHead)
+	snake.prepend(newHead)
 
 	if newHead == state.level.exit {
 		state.status = StatusWon
@@ -155,17 +157,15 @@ func (snake *Snake) move() {
 	}
 
 	snake.eatFood()
-
-	snake.Follow()
 }
 
-func (snake *Snake) checkCollision(p Vec2) {
-	if state.level.walls[p.y][p.x] {
+func (snake *Snake) checkCollision(head Vec2) {
+	if state.level.walls[head.y][head.x] {
 		state.status = StatusLost
 		return
 	}
 	for _, s := range snake.getTail() {
-		if s == p {
+		if s == head {
 			state.status = StatusLost
 			return
 		}
@@ -175,20 +175,26 @@ func (snake *Snake) checkCollision(p Vec2) {
 func (snake *Snake) eatFood() {
 	for i, foodPosition := range state.level.foods {
 		if snake.getHead() == foodPosition {
-			state.level.foods = state.level.foods.RemoveAt(i)
+			state.level.foods = state.level.foods.removeAt(i)
 			state.score++
 			state.powerUpTimer = POWERUP_TIME
 			return
 		}
 	}
-	snake.retract()
+	snake.removeLastSegment()
 }
 
-func (snake *Snake) extend(newHead Vec2) {
-	snake.body = append(Slice[Vec2]{newHead}, snake.body...)
+func (snake *Snake) prepend(newHead Vec2) {
+	snake.body = append(NewSlice(newHead), snake.body...)
 }
 
-func (snake *Snake) retract() {
+// removeLastSegment removes the last segment of the snake's body. this function
+// is called when the snake moves without eating food, effectively making the
+// snake appear to move forward by removing its tail as a new head segment is
+// added.
+func (snake *Snake) removeLastSegment() {
+	// Remove the last element of the body slice by re-slicing to exclude the
+	// final element.
 	snake.body = snake.body[:len(snake.body)-1]
 }
 
@@ -206,8 +212,8 @@ type Level struct {
 	foods    Slice[Vec2]
 	entrance Vec2
 	exit     Vec2
-	w        int
-	h        int
+	width    int
+	height   int
 }
 
 // NewLevel creates a new instance of Level from the given id by loading the
@@ -222,13 +228,13 @@ func NewLevel(id int) Level {
 	levelString := string(content)
 
 	lines := strings.Split(strings.TrimSpace(levelString), "\n")
-	level.h = len(lines)
-	level.w = len(lines[0])
-	level.walls = make(Slice[Slice[bool]], level.h)
+	level.height = len(lines)
+	level.width = len(lines[0])
+	level.walls = make(Slice[Slice[bool]], level.height)
 	level.foods = Slice[Vec2]{}
 
 	for y, line := range lines {
-		level.walls[y] = make(Slice[bool], level.w)
+		level.walls[y] = make(Slice[bool], level.width)
 		for x, char := range line {
 			switch char {
 			case '#':
@@ -276,10 +282,10 @@ func handleInput() {
 	}
 }
 
-// Follow adjusts the viewport x to follow the snake when it is past a certain
-// the center of the viewport by a certain amount
-func (snake *Snake) Follow() {
-	head := snake.getHead()
+// updateViewport adjusts the viewport x to follow the snake when it is past a
+// certain the center of the viewport by a certain amount
+func updateViewport() {
+	head := state.snake.getHead()
 	if head.x-state.viewportX > VIEWPORT_WIDTH*3/4 {
 		state.viewportX = head.x - VIEWPORT_WIDTH*3/4
 	} else if head.x-state.viewportX < VIEWPORT_WIDTH/4 {
@@ -288,8 +294,8 @@ func (snake *Snake) Follow() {
 
 	if state.viewportX < 0 {
 		state.viewportX = 0
-	} else if state.viewportX > state.level.w-VIEWPORT_WIDTH {
-		state.viewportX = state.level.w - VIEWPORT_WIDTH
+	} else if state.viewportX > state.level.width-VIEWPORT_WIDTH {
+		state.viewportX = state.level.width - VIEWPORT_WIDTH
 	}
 }
 
@@ -348,10 +354,10 @@ func drawStartScreen(screen *ebiten.Image) {
 }
 
 func drawLevel(screen *ebiten.Image) {
-	for y := 0; y < state.level.h; y++ {
+	for y := 0; y < state.level.height; y++ {
 		for x := 0; x < VIEWPORT_WIDTH; x++ {
 			worldX := x + state.viewportX
-			if worldX < state.level.w && state.level.walls[y][worldX] {
+			if worldX < state.level.width && state.level.walls[y][worldX] {
 				vector.DrawFilledRect(screen, float32(x*GRID_SIZE), float32(y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{100, 100, 100, 255}, true)
 			}
 		}
@@ -438,8 +444,9 @@ func updateStartState() {
 func updatePlayingState() {
 	handleInput()
 	state.snake.move()
+	updateViewport()
 	if state.powerUpTimer > 0 {
-		state.powerUpTimer--
+		state.powerUpTimer -= 1
 	}
 }
 
