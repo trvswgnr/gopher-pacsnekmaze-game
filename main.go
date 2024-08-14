@@ -193,8 +193,8 @@ func (snake *Snake) prepend(newHead Vec2) {
 // snake appear to move forward by removing its tail as a new head segment is
 // added.
 func (snake *Snake) removeLastSegment() {
-	// Remove the last element of the body slice by re-slicing to exclude the
-	// final element.
+	// remove the last element of the body slice by re-slicing to exclude the
+	// final element
 	snake.body = snake.body[:len(snake.body)-1]
 }
 
@@ -363,22 +363,57 @@ func drawLevel(screen *ebiten.Image) {
 		}
 	}
 
+	// draw foods
 	for _, food := range state.level.foods {
 		if food.x >= state.viewportX && food.x < state.viewportX+VIEWPORT_WIDTH {
 			vector.DrawFilledRect(screen, float32((food.x-state.viewportX)*GRID_SIZE), float32(food.y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{255, 0, 0, 255}, true)
 		}
 	}
 
+	// draw exit
 	if state.level.exit.x >= state.viewportX && state.level.exit.x < state.viewportX+VIEWPORT_WIDTH {
-		vector.DrawFilledRect(screen, float32((state.level.exit.x-state.viewportX)*GRID_SIZE), float32(state.level.exit.y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{0, 0, 255, 255}, true)
+		c := color.RGBA{0, 0, 0, 255} // black
+		vector.DrawFilledRect(screen, float32((state.level.exit.x-state.viewportX)*GRID_SIZE), float32(state.level.exit.y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, c, true)
 	}
 }
 
 func drawSnake(screen *ebiten.Image) {
+	head := state.snake.getHead()
+	blue := color.RGBA{0, 0, 255, 255}
+	green := color.RGBA{0, 255, 0, 255}
 	for _, p := range state.snake.body {
 		if p.x >= state.viewportX && p.x < state.viewportX+VIEWPORT_WIDTH {
-			vector.DrawFilledRect(screen, float32((p.x-state.viewportX)*GRID_SIZE), float32(p.y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{0, 255, 0, 255}, true)
+			headColor := green
+			bodyColor := dimColor(green, 0.8)
+			if state.powerUpTimer > 0 {
+				// flash between green and blue
+				if state.powerUpTimer%10 < 5 {
+					headColor = blue
+					bodyColor = dimColor(blue, 0.8)
+				} else {
+					headColor = green
+					bodyColor = dimColor(green, 0.8)
+				}
+			}
+
+			if p == head {
+				if state.status == StatusLost {
+					headColor = color.RGBA{255, 165, 0, 120} // orange
+				}
+				vector.DrawFilledRect(screen, float32((p.x-state.viewportX)*GRID_SIZE), float32(p.y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, headColor, true)
+			} else {
+				vector.DrawFilledRect(screen, float32((p.x-state.viewportX)*GRID_SIZE), float32(p.y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, bodyColor, true)
+			}
 		}
+	}
+}
+
+func dimColor(c color.RGBA, factor float64) color.RGBA {
+	return color.RGBA{
+		R: uint8(float64(c.R) * factor),
+		G: uint8(float64(c.G) * factor),
+		B: uint8(float64(c.B) * factor),
+		A: c.A,
 	}
 }
 
