@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"embed"
+	"fmt"
 	"image/color"
 	"log"
 	"strconv"
@@ -13,68 +14,47 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/vector"
 )
 
+const (
+	SCREEN_WIDTH   = 640
+	SCREEN_HEIGHT  = 480
+	GRID_SIZE      = 20
+	VIEWPORT_WIDTH = SCREEN_WIDTH / GRID_SIZE
+	TITLE          = "PACSNEK MAZE"
+	POWERUP_TIME   = 300 // 5 seconds @ 60fps
+)
+
+type Slice[E any] []E
+
+func NewSlice[E any](elements ...E) Slice[E] {
+	return elements
+}
+
+func (slice Slice[E]) RemoveAt(index int) Slice[E] {
+	return append(slice[:index], slice[index+1:]...)
+}
+
+type Status int
+
+const (
+	StatusStarted Status = iota
+	StatusPlaying
+	StatusLost
+	StatusWon
+)
+
 //go:embed assets/*
 var assets embed.FS
 
-const (
-    SCREEN_WIDTH   = 640
-    SCREEN_HEIGHT  = 480
-    GRID_SIZE      = 20
-    VIEWPORT_WIDTH = SCREEN_WIDTH / GRID_SIZE
-    TITLE          = "tr4vvyr00lz"
-    POWERUP_TIME   = 300 // 5 seconds @ 60fps
-)
+// global font
+var font Font = NewFont()
 
-type GameState int
-
-const (
-    StateStart GameState = iota
-    StatePlaying
-    StateGameOver
-    StateWin
-)
-
-func (gs GameState) String() string {
-    return [...]string{"Start", "Playing", "GameOver", "Win"}[gs]
+type Font struct {
+	regular text.GoTextFace
+	small   text.GoTextFace
 }
 
-type Game struct {
-	snake             []Point
-	foods             []Point
-	exit              Point
-	direction         Point
-	nextDirection     Point
-	score             int
-	state             GameState
-	fontFace          *text.GoTextFace
-	smallerFont       *text.GoTextFace
-	maze              [][]bool
-	viewportX         int
-	mazeWidth         int
-	mazeHeight        int
-	moveCounter       int
-	powerUpTimer      int
-	startBlinkCounter int
-}
-
-type Point struct {
-	X, Y int
-}
-
-
-func NewGame() *Game {
-	g := &Game{
-		direction:     Point{X: 1, Y: 0},
-		nextDirection: Point{X: 1, Y: 0},
-		state:         StateStart,
-		viewportX:     0,
-	}
-	g.loadLevel()
-	g.loadFonts()
-	return g
-}
-
-func (g *Game) loadFonts() {
+// NewFont creates a new Font struct by loading the font from the assets folder
+func NewFont() Font {
 	fontBytes, err := assets.ReadFile("assets/pressstart2p.ttf")
 	if err != nil {
 		log.Fatal(err)
@@ -85,270 +65,387 @@ func (g *Game) loadFonts() {
 		log.Fatal(err)
 	}
 
-	g.fontFace = &text.GoTextFace{
-		Source: fontFaceSource,
-		Size:   24,
-	}
-
-	g.smallerFont = &text.GoTextFace{
-		Source: fontFaceSource,
-		Size:   20,
+	return Font{
+		regular: text.GoTextFace{
+			Source: fontFaceSource,
+			Size:   24,
+		},
+		small: text.GoTextFace{
+			Source: fontFaceSource,
+			Size:   20,
+		},
 	}
 }
 
-func (g *Game) loadLevel() {
-	content, err := assets.ReadFile("assets/level.txt")
+// state is the global game state, initialized with a new State instance. it
+// holds all the current game information and is updated throughout gameplay.
+var state State = NewState()
+
+// NewState creates and returns a new State instance, initializing the game with
+// default values for a new game session.
+func NewState() State {
+	level := NewLevel(1)
+
+	return State{
+		status:       StatusStarted,
+		viewportX:    0,
+		level:        level,
+		snake:        NewSnake(level.entrance),
+		score:        0,
+		powerUpTimer: 0,
+	}
+}
+
+// Vec2 represents a 2D vector or point with integer coordinates. it's used
+// throughout the game to represent position and direction.
+type Vec2 struct {
+	x int
+	y int
+}
+
+type Snake struct {
+	body                Slice[Vec2]
+	prevDirection       Vec2
+	direction           Vec2
+	framesSinceLastMove int
+}
+
+func NewSnake(position Vec2) Snake {
+	return Snake{
+		body:                NewSlice(position),
+		prevDirection:       Vec2{x: 1, y: 0},
+		direction:           Vec2{x: 0, y: 0},
+		framesSinceLastMove: 0,
+	}
+}
+
+// createHead calculates the new position for the snake's head based on
+// its current position and direction. it wraps around the level boundaries to
+// create a toroidal world effect.
+func (snake *Snake) createHead() Vec2 {
+	head := snake.getHead()
+	prev := snake.prevDirection
+	height := state.level.h
+	width := state.level.w
+	return Vec2{
+		x: (head.x + prev.x + width) % width,
+		y: (head.y + prev.y + height) % height,
+	}
+}
+
+func (snake *Snake) move() {
+	snake.framesSinceLastMove++
+	if snake.framesSinceLastMove < 10 {
+		return
+	}
+	snake.framesSinceLastMove = 0
+	if snake.direction.x != -snake.prevDirection.x || snake.direction.y != -snake.prevDirection.y {
+		snake.prevDirection = snake.direction
+	}
+
+	newHead := snake.createHead()
+
+	snake.checkCollision(newHead)
+
+	snake.extend(newHead)
+
+	if newHead == state.level.exit {
+		state.status = StatusWon
+		return
+	}
+
+	snake.eatFood()
+
+	snake.Follow()
+}
+
+func (snake *Snake) checkCollision(p Vec2) {
+	if state.level.walls[p.y][p.x] {
+		state.status = StatusLost
+		return
+	}
+	for _, s := range snake.getTail() {
+		if s == p {
+			state.status = StatusLost
+			return
+		}
+	}
+}
+
+func (snake *Snake) eatFood() {
+	for i, foodPosition := range state.level.foods {
+		if snake.getHead() == foodPosition {
+			state.level.foods = state.level.foods.RemoveAt(i)
+			state.score++
+			state.powerUpTimer = POWERUP_TIME
+			return
+		}
+	}
+	snake.retract()
+}
+
+func (snake *Snake) extend(newHead Vec2) {
+	snake.body = append(Slice[Vec2]{newHead}, snake.body...)
+}
+
+func (snake *Snake) retract() {
+	snake.body = snake.body[:len(snake.body)-1]
+}
+
+func (snake *Snake) getHead() Vec2 {
+	return snake.body[0]
+}
+
+func (snake *Snake) getTail() Slice[Vec2] {
+	return snake.body[1:]
+}
+
+type Level struct {
+	id       int
+	walls    Slice[Slice[bool]]
+	foods    Slice[Vec2]
+	entrance Vec2
+	exit     Vec2
+	w        int
+	h        int
+}
+
+// NewLevel creates a new instance of Level from the given id by loading the
+// associated text file from the assets folder
+func NewLevel(id int) Level {
+	level := Level{id: id}
+	filename := fmt.Sprintf("assets/level-%d.txt", id)
+	content, err := assets.ReadFile(filename)
 	if err != nil {
 		log.Fatal(err)
 	}
 	levelString := string(content)
 
 	lines := strings.Split(strings.TrimSpace(levelString), "\n")
-	g.mazeHeight = len(lines)
-	g.mazeWidth = len(lines[0])
-	g.maze = make([][]bool, g.mazeHeight)
-	g.foods = []Point{}
-
-	hasSnakeStart := false
-	hasExit := false
+	level.h = len(lines)
+	level.w = len(lines[0])
+	level.walls = make(Slice[Slice[bool]], level.h)
+	level.foods = Slice[Vec2]{}
 
 	for y, line := range lines {
-		g.maze[y] = make([]bool, g.mazeWidth)
+		level.walls[y] = make(Slice[bool], level.w)
 		for x, char := range line {
 			switch char {
 			case '#':
-				g.maze[y][x] = true
+				level.walls[y][x] = true
 			case 'F':
-				g.foods = append(g.foods, Point{X: x, Y: y})
+				level.foods = append(level.foods, Vec2{x: x, y: y})
 			case 'S':
-				g.snake = []Point{{X: x, Y: y}}
-				hasSnakeStart = true
+				level.entrance = Vec2{x: x, y: y}
 			case 'E':
-				g.exit = Point{X: x, Y: y}
-				hasExit = true
+				level.exit = Vec2{x: x, y: y}
 			}
 		}
 	}
 
-	if !hasSnakeStart || !hasExit || len(g.foods) == 0 {
+	if level.entrance == (Vec2{}) || level.exit == (Vec2{}) || len(level.foods) == 0 {
 		log.Fatal("Invalid level: missing snake start, exit, or food")
 	}
+
+	return level
 }
 
-func (g *Game) Update() error {
-	switch g.state {
-	case StateStart:
-		if ebiten.IsKeyPressed(ebiten.KeySpace) {
-			g.state = StatePlaying
-		}
-		// update blink counter
-		g.startBlinkCounter++
-		if g.startBlinkCounter >= 60 { // reset every second (60fps)
-			g.startBlinkCounter = 0
-		}
-	case StatePlaying:
-		g.handleInput()
-		g.moveCounter++
-		if g.moveCounter >= 10 {
-			g.moveCounter = 0
-			g.moveSnake()
-		}
-		if g.powerUpTimer > 0 {
-			g.powerUpTimer--
-		}
-	case StateGameOver, StateWin:
-		if ebiten.IsKeyPressed(ebiten.KeyR) {
-			*g = *NewGame()
-			g.state = StatePlaying
-		}
-	}
+var startBlinkCounter int = 0
 
-	return nil
+type State struct {
+	snake        Snake
+	level        Level
+	status       Status
+	score        int
+	viewportX    int
+	powerUpTimer int
 }
 
-func (g *Game) handleInput() {
-	if ebiten.IsKeyPressed(ebiten.KeyArrowLeft) && g.direction.X == 0 {
-		g.nextDirection = Point{X: -1, Y: 0}
+func handleInput() {
+	if ebiten.IsKeyPressed(ebiten.KeyArrowLeft) && state.snake.prevDirection.x == 0 {
+		state.snake.direction = Vec2{x: -1, y: 0}
 	}
-	if ebiten.IsKeyPressed(ebiten.KeyArrowRight) && g.direction.X == 0 {
-		g.nextDirection = Point{X: 1, Y: 0}
+	if ebiten.IsKeyPressed(ebiten.KeyArrowRight) && state.snake.prevDirection.x == 0 {
+		state.snake.direction = Vec2{x: 1, y: 0}
 	}
-	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) && g.direction.Y == 0 {
-		g.nextDirection = Point{X: 0, Y: -1}
+	if ebiten.IsKeyPressed(ebiten.KeyArrowUp) && state.snake.prevDirection.y == 0 {
+		state.snake.direction = Vec2{x: 0, y: -1}
 	}
-	if ebiten.IsKeyPressed(ebiten.KeyArrowDown) && g.direction.Y == 0 {
-		g.nextDirection = Point{X: 0, Y: 1}
+	if ebiten.IsKeyPressed(ebiten.KeyArrowDown) && state.snake.prevDirection.y == 0 {
+		state.snake.direction = Vec2{x: 0, y: 1}
 	}
 }
 
-func (g *Game) moveSnake() {
-	if g.nextDirection.X != -g.direction.X || g.nextDirection.Y != -g.direction.Y {
-		g.direction = g.nextDirection
+// Follow adjusts the viewport x to follow the snake when it is past a certain
+// the center of the viewport by a certain amount
+func (snake *Snake) Follow() {
+	head := snake.getHead()
+	if head.x-state.viewportX > VIEWPORT_WIDTH*3/4 {
+		state.viewportX = head.x - VIEWPORT_WIDTH*3/4
+	} else if head.x-state.viewportX < VIEWPORT_WIDTH/4 {
+		state.viewportX = head.x - VIEWPORT_WIDTH/4
 	}
 
-	newHead := Point{
-		X: (g.snake[0].X + g.direction.X + g.mazeWidth) % g.mazeWidth,
-		Y: (g.snake[0].Y + g.direction.Y + g.mazeHeight) % g.mazeHeight,
+	if state.viewportX < 0 {
+		state.viewportX = 0
+	} else if state.viewportX > state.level.w-VIEWPORT_WIDTH {
+		state.viewportX = state.level.w - VIEWPORT_WIDTH
 	}
-
-	if g.isCollision(newHead) {
-		g.state = StateGameOver
-		return
-	}
-
-	g.snake = append([]Point{newHead}, g.snake...)
-
-	if newHead == g.exit {
-		g.state = StateWin
-		return
-	}
-
-	ateFood := false
-	for i, food := range g.foods {
-		if newHead == food {
-			g.score++
-			ateFood = true
-			g.foods = append(g.foods[:i], g.foods[i+1:]...)
-			g.powerUpTimer = POWERUP_TIME
-			break
-		}
-	}
-
-	if !ateFood {
-		g.snake = g.snake[:len(g.snake)-1]
-	}
-
-	g.adjustViewport()
-}
-
-func (g *Game) isCollision(p Point) bool {
-	if g.maze[p.Y][p.X] {
-		return true
-	}
-	for _, s := range g.snake[1:] {
-		if s == p {
-			return true
-		}
-	}
-	return false
-}
-
-func (g *Game) adjustViewport() {
-	snakeHead := g.snake[0]
-	if snakeHead.X-g.viewportX > VIEWPORT_WIDTH*3/4 {
-		g.viewportX = snakeHead.X - VIEWPORT_WIDTH*3/4
-	} else if snakeHead.X-g.viewportX < VIEWPORT_WIDTH/4 {
-		g.viewportX = snakeHead.X - VIEWPORT_WIDTH/4
-	}
-
-	if g.viewportX < 0 {
-		g.viewportX = 0
-	} else if g.viewportX > g.mazeWidth-VIEWPORT_WIDTH {
-		g.viewportX = g.mazeWidth - VIEWPORT_WIDTH
-	}
-}
-
-func drawMaze(g *Game, screen *ebiten.Image) {
-	for y := 0; y < g.mazeHeight; y++ {
-		for x := 0; x < VIEWPORT_WIDTH; x++ {
-			worldX := x + g.viewportX
-			if worldX < g.mazeWidth && g.maze[y][worldX] {
-				vector.DrawFilledRect(screen, float32(x*GRID_SIZE), float32(y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{100, 100, 100, 255}, true)
-			}
-		}
-	}
-
-	for _, food := range g.foods {
-		if food.X >= g.viewportX && food.X < g.viewportX+VIEWPORT_WIDTH {
-			vector.DrawFilledRect(screen, float32((food.X-g.viewportX)*GRID_SIZE), float32(food.Y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{255, 0, 0, 255}, true)
-		}
-	}
-
-	if g.exit.X >= g.viewportX && g.exit.X < g.viewportX+VIEWPORT_WIDTH {
-		vector.DrawFilledRect(screen, float32((g.exit.X-g.viewportX)*GRID_SIZE), float32(g.exit.Y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{0, 0, 255, 255}, true)
-	}
-}
-
-func drawSnake(g *Game, screen *ebiten.Image) {
-	for _, p := range g.snake {
-		if p.X >= g.viewportX && p.X < g.viewportX+VIEWPORT_WIDTH {
-			vector.DrawFilledRect(screen, float32((p.X-g.viewportX)*GRID_SIZE), float32(p.Y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{0, 255, 0, 255}, true)
-		}
-	}
-}
-
-func drawHUD(g *Game, screen *ebiten.Image) {
-	op := &text.DrawOptions{}
-	op.GeoM.Translate(10, 25)
-	text.Draw(screen, "Score: "+strconv.Itoa(g.score), g.smallerFont, op)
-
-	if g.powerUpTimer > 0 {
-		powerUpText := "Power-Up: " + strconv.Itoa(g.powerUpTimer/60) // Convert frames to seconds
-		op.GeoM.Translate(0, 25)
-		text.Draw(screen, powerUpText, g.smallerFont, op)
-	}
-
-	if g.state == StateGameOver || g.state == StateWin {
-		op := &text.DrawOptions{}
-
-		message := "Game Over!"
-		if g.state == StateWin {
-			message = "You Win!"
-		}
-		messageWidth := float64(len(message)) * float64(g.smallerFont.Size)
-		op.GeoM.Translate((float64(SCREEN_WIDTH)-messageWidth)/2, float64(SCREEN_HEIGHT)/2-25)
-		text.Draw(screen, message, g.smallerFont, op)
-
-		restartText := "Press 'R' to restart"
-		restartWidth := float64(len(restartText)) * float64(g.smallerFont.Size)
-		op.GeoM.Reset()
-		op.GeoM.Translate((float64(SCREEN_WIDTH)-restartWidth)/2, float64(SCREEN_HEIGHT)/2+25)
-		text.Draw(screen, restartText, g.smallerFont, op)
-	}
-}
-
-func drawStartScreen(g *Game, screen *ebiten.Image) {
-	titleWidth := float64(len(TITLE)) * float64(g.fontFace.Size)
-	titleHeight := float64(g.fontFace.Size)
-
-	op := &text.DrawOptions{}
-	op.GeoM.Translate((float64(SCREEN_WIDTH)-titleWidth)/2, float64(SCREEN_HEIGHT)/2-titleHeight/2-30)
-	text.Draw(screen, TITLE, g.fontFace, op)
-
-	// only draw the start text when it should be visible
-	if g.startBlinkCounter < 30 { // visible for half a second, then invisible for half a second
-		startText := "Press SPACE to start"
-		startWidth := float64(len(startText)) * float64(g.fontFace.Size)
-
-		op.GeoM.Reset()
-		op.GeoM.Translate((float64(SCREEN_WIDTH)-startWidth)/2, float64(SCREEN_HEIGHT)/2+30)
-		text.Draw(screen, startText, g.fontFace, op)
-	}
-}
-func (g *Game) Draw(screen *ebiten.Image) {
-	screen.Fill(color.RGBA{0, 0, 0, 255})
-
-	switch g.state {
-	case StateStart:
-		drawStartScreen(g, screen)
-	case StatePlaying, StateGameOver, StateWin:
-		drawMaze(g, screen)
-		drawSnake(g, screen)
-		drawHUD(g, screen)
-	}
-}
-
-func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
-	return SCREEN_WIDTH, SCREEN_HEIGHT
 }
 
 func main() {
 	ebiten.SetWindowSize(SCREEN_WIDTH, SCREEN_HEIGHT)
 	ebiten.SetWindowTitle(TITLE)
 
-	game := NewGame()
-
+	game := &Game{}
 	if err := ebiten.RunGame(game); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// Empty struct to satisfy ebitengine interface
+type Game struct{}
+
+// satisfies the main layout method from the [ebiten.Game] interface
+//
+// [ebiten.Game]: https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2#Game
+func (*Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
+	return SCREEN_WIDTH, SCREEN_HEIGHT
+}
+
+// satisfies the main drawing method from [ebiten.Game]
+//
+// [ebiten.Game]: https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2#Game
+func (*Game) Draw(screen *ebiten.Image) {
+	screen.Fill(color.RGBA{0, 0, 0, 255})
+
+	switch state.status {
+	case StatusStarted:
+		drawStartScreen(screen)
+	case StatusPlaying, StatusLost, StatusWon:
+		drawLevel(screen)
+		drawSnake(screen)
+		drawHUD(screen)
+	}
+}
+
+func drawStartScreen(screen *ebiten.Image) {
+	titleWidth := float64(len(TITLE)) * font.regular.Size
+	titleHeight := font.regular.Size
+
+	op := &text.DrawOptions{}
+	op.GeoM.Translate((float64(SCREEN_WIDTH)-titleWidth)/2, float64(SCREEN_HEIGHT)/2-titleHeight/2-30)
+	text.Draw(screen, TITLE, &font.regular, op)
+
+	if startBlinkCounter < 30 {
+		startText := "press SPACE to start"
+		startWidth := float64(len(startText)) * font.regular.Size
+
+		op.GeoM.Reset()
+		op.GeoM.Translate((float64(SCREEN_WIDTH)-startWidth)/2, float64(SCREEN_HEIGHT)/2+30)
+		text.Draw(screen, startText, &font.regular, op)
+	}
+}
+
+func drawLevel(screen *ebiten.Image) {
+	for y := 0; y < state.level.h; y++ {
+		for x := 0; x < VIEWPORT_WIDTH; x++ {
+			worldX := x + state.viewportX
+			if worldX < state.level.w && state.level.walls[y][worldX] {
+				vector.DrawFilledRect(screen, float32(x*GRID_SIZE), float32(y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{100, 100, 100, 255}, true)
+			}
+		}
+	}
+
+	for _, food := range state.level.foods {
+		if food.x >= state.viewportX && food.x < state.viewportX+VIEWPORT_WIDTH {
+			vector.DrawFilledRect(screen, float32((food.x-state.viewportX)*GRID_SIZE), float32(food.y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{255, 0, 0, 255}, true)
+		}
+	}
+
+	if state.level.exit.x >= state.viewportX && state.level.exit.x < state.viewportX+VIEWPORT_WIDTH {
+		vector.DrawFilledRect(screen, float32((state.level.exit.x-state.viewportX)*GRID_SIZE), float32(state.level.exit.y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{0, 0, 255, 255}, true)
+	}
+}
+
+func drawSnake(screen *ebiten.Image) {
+	for _, p := range state.snake.body {
+		if p.x >= state.viewportX && p.x < state.viewportX+VIEWPORT_WIDTH {
+			vector.DrawFilledRect(screen, float32((p.x-state.viewportX)*GRID_SIZE), float32(p.y*GRID_SIZE), GRID_SIZE-1, GRID_SIZE-1, color.RGBA{0, 255, 0, 255}, true)
+		}
+	}
+}
+
+func drawHUD(screen *ebiten.Image) {
+	// draw score
+	op := &text.DrawOptions{}
+	op.GeoM.Translate(10, 25)
+	text.Draw(screen, "score: "+strconv.Itoa(state.score), &font.small, op)
+
+	// draw power up timer
+	if state.powerUpTimer > 0 {
+		powerUpText := "power-up: " + strconv.Itoa(state.powerUpTimer/60) // Convert frames to seconds
+		op.GeoM.Translate(0, 25)
+		text.Draw(screen, powerUpText, &font.small, op)
+	}
+
+	// draw end game message
+	if state.status == StatusLost || state.status == StatusWon {
+		// semi-transparent black background
+		vector.DrawFilledRect(screen, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, color.RGBA{0, 0, 0, 128}, true)
+
+		op := &text.DrawOptions{}
+
+		message := "game over!"
+		if state.status == StatusWon {
+			message = "you win!"
+		}
+
+		messageWidth := float64(len(message)) * float64(font.small.Size)
+		op.GeoM.Translate((float64(SCREEN_WIDTH)-messageWidth)/2, float64(SCREEN_HEIGHT)/2-25)
+		text.Draw(screen, message, &font.small, op)
+
+		restartText := "press R to restart"
+		restartWidth := float64(len(restartText)) * float64(font.small.Size)
+		op.GeoM.Reset()
+		op.GeoM.Translate((float64(SCREEN_WIDTH)-restartWidth)/2, float64(SCREEN_HEIGHT)/2+25)
+		text.Draw(screen, restartText, &font.small, op)
+	}
+}
+
+// satisfies the main update method from the [ebiten.Game] interface
+//
+// [ebiten.Game]: https://pkg.go.dev/github.com/hajimehoshi/ebiten/v2#Game
+func (*Game) Update() error {
+	switch state.status {
+	case StatusStarted:
+		updateStartState()
+	case StatusPlaying:
+		updatePlayingState()
+	case StatusLost, StatusWon:
+		updateEndState()
+	}
+	return nil
+}
+
+func updateStartState() {
+	if ebiten.IsKeyPressed(ebiten.KeySpace) {
+		state.status = StatusPlaying
+	}
+	startBlinkCounter = (startBlinkCounter + 1) % 60
+}
+
+func updatePlayingState() {
+	handleInput()
+	state.snake.move()
+	if state.powerUpTimer > 0 {
+		state.powerUpTimer--
+	}
+}
+
+func updateEndState() {
+	if ebiten.IsKeyPressed(ebiten.KeyR) {
+		state = NewState()
+		state.status = StatusPlaying
 	}
 }
